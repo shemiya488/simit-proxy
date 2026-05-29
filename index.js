@@ -6,27 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const SIMIT_BASE = "https://consultasimit.fcm.org.co";
-const SIMIT_URL  = `${SIMIT_BASE}/simit/microservices/estado-cuenta-simit/estadocuenta/consulta`;
-const TOKEN_URL  = `${SIMIT_BASE}/simit/microservices/estado-cuenta-simit/estadocuenta/token`;
-
-// Obtener token fresco del SIMIT
-async function getToken() {
-    try {
-        const res = await axios.get(TOKEN_URL, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Origin": "https://fcm.org.co",
-                "Referer": "https://fcm.org.co/simit/"
-            },
-            timeout: 10000
-        });
-        return res.data?.token || res.data?.access_token || res.data;
-    } catch(e) {
-        return null;
-    }
-}
+const SIMIT_URL = "https://consultasimit.fcm.org.co/simit/microservices/estado-cuenta-simit/estadocuenta/consulta";
 
 app.post("/api/simit", async (req, res) => {
     const filtro = req.body.filtro || req.body.documento || req.body.placa;
@@ -35,96 +15,60 @@ app.post("/api/simit", async (req, res) => {
         return res.status(400).json({ ok: false, error: "El campo 'filtro' es obligatorio" });
     }
 
-    // Intentar primero sin token, luego con token
-    const intentos = [
-        // Intento 1: sin token, simulando navegador
-        {
-            headers: {
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "es-CO,es;q=0.9",
-                "Origin": "https://fcm.org.co",
-                "Referer": "https://fcm.org.co/simit/",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-site"
-            }
-        },
-        // Intento 2: con origen móvil
-        {
-            headers: {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Origin": "https://fcm.org.co",
-                "Referer": "https://fcm.org.co/simit/",
-                "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Mobile Safari/537.36",
-                "X-Requested-With": "XMLHttpRequest"
-            }
-        }
-    ];
+    try {
+        const ts = Date.now();
+        const cookie = [
+            `_gid=GA1.3.${Math.floor(Math.random()*9999999999)}.${ts}`,
+            `_fbp=fb.2.${ts}.${Math.floor(Math.random()*9999999999999)}`,
+            `_gcl_au=1.1.${Math.floor(Math.random()*9999999999)}.${ts}`,
+            `_ga=GA1.3.${Math.floor(Math.random()*9999999999)}.${ts}`,
+            `_gat_UA-113777949-32=1`,
+            `_ga_8TBQXXE1D2=GS2.1.${ts}$o1$g1$t${ts}$j60$l0$h0`
+        ].join("; ");
 
-    for (const intento of intentos) {
-        try {
-            const response = await axios.post(
-                SIMIT_URL,
-                { filtro },
-                { headers: intento.headers, timeout: 20000 }
-            );
-
-            const data = response.data?.data ?? response.data;
-            const status = (!data || (Array.isArray(data) && data.length === 0)) ? "notfound" : "ok";
-            return res.json({ ok: true, status, data });
-
-        } catch (error) {
-            const code = error.response?.status;
-            // Si no es 401/403, salir del loop
-            if (code !== 401 && code !== 403) {
-                return res.status(500).json({
-                    ok: false,
-                    error: "Error consultando SIMIT",
-                    codigo: code,
-                    detalle: error.message
-                });
+        const response = await axios.post(
+            SIMIT_URL,
+            { filtro },
+            {
+                headers: {
+                    "Accept": "*/*",
+                    "Accept-Encoding": "gzip, deflate, br, zstd",
+                    "Accept-Language": "es",
+                    "Connection": "keep-alive",
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                    "Host": "consultasimit.fcm.org.co",
+                    "Origin": "https://www.fcm.org.co",
+                    "Referer": "https://www.fcm.org.co/",
+                    "Sec-Ch-Ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+                    "Sec-Ch-Ua-Mobile": "?1",
+                    "Sec-Ch-Ua-Platform": '"Android"',
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Site": "same-site",
+                    "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
+                },
+                timeout: 20000,
+                decompress: true
             }
-            // Si es 401/403, intentar el siguiente
-        }
+        );
+
+        const data = response.data?.data ?? response.data;
+        const status = (!data || (Array.isArray(data) && data.length === 0)) ? "notfound" : "ok";
+        return res.json({ ok: true, status, data });
+
+    } catch (error) {
+        return res.status(500).json({
+            ok: false,
+            error: "No fue posible consultar SIMIT",
+            codigo: error.response?.status,
+            detalle: error.message,
+            respuesta: error.response?.data
+        });
     }
-
-    // Último recurso: intentar obtener token dinámico
-    const token = await getToken();
-    if (token) {
-        try {
-            const response = await axios.post(
-                SIMIT_URL,
-                { filtro },
-                {
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                        "Authorization": `Bearer ${token}`,
-                        "Origin": "https://fcm.org.co",
-                        "Referer": "https://fcm.org.co/simit/",
-                        "User-Agent": "Mozilla/5.0 Chrome/120"
-                    },
-                    timeout: 20000
-                }
-            );
-            const data = response.data?.data ?? response.data;
-            const status = (!data || (Array.isArray(data) && data.length === 0)) ? "notfound" : "ok";
-            return res.json({ ok: true, status, data });
-        } catch(e) {
-            // token tampoco funcionó
-        }
-    }
-
-    return res.status(500).json({
-        ok: false,
-        error: "El SIMIT requiere autenticación especial. Intenta más tarde."
-    });
 });
 
-app.get("/", (req, res) => res.json({ status: "ok", message: "Proxy SIMIT v3 activo" }));
+app.get("/", (req, res) => res.json({ status: "ok", message: "Proxy SIMIT v4 activo" }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Proxy SIMIT v3 corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Proxy SIMIT v4 corriendo en puerto ${PORT}`));
